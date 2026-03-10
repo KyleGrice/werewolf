@@ -235,9 +235,19 @@ function pts(n){return (n>0?"+":"")+n;}
 let _state = {screen:"home", game:null, player:null, lobbyPlayers:[]};
 let _subs = [];
 function getState(){ return _state; }
-function setState(patch){ _state={..._state,...patch}; _subs.forEach(f=>f()); }
 function subscribe(fn){ _subs.push(fn); return ()=>{ _subs=_subs.filter(f=>f!==fn); }; }
-// setState is redefined after session helpers are declared — see below
+function _coreSetState(patch){ _state={..._state,...patch}; _subs.forEach(f=>f()); }
+function setState(patch){
+  _coreSetState(patch);
+  const s = getState();
+  try {
+    if(s.screen==="home"||s.screen==="modsetup"||s.screen==="join"){
+      localStorage.removeItem(SESSION_KEY);
+    } else {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({screen:s.screen, game:s.game, player:s.player}));
+    }
+  } catch(e) {}
+}
 
 // ── RENDER LOOP ───────────────────────────────────────────────────────────────
 function mount(fn){
@@ -771,16 +781,6 @@ function screenPlayer(){
 // ── SESSION PERSISTENCE ───────────────────────────────────────────────────────
 const SESSION_KEY = "ww_session";
 
-function saveSession(screen, game, player) {
-  try {
-    if (screen === "home" || screen === "modsetup" || screen === "join") {
-      localStorage.removeItem(SESSION_KEY);
-    } else {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ screen, game, player }));
-    }
-  } catch(e) {}
-}
-
 async function restoreSession() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -788,7 +788,6 @@ async function restoreSession() {
     const { screen, game, player } = JSON.parse(raw);
     if (!game?.id) return false;
 
-    // Re-fetch fresh game state
     const { data: games } = await sb.from("games").select("*").eq("id", game.id);
     const freshGame = games?.[0];
     if (!freshGame || freshGame.status === "ended") {
@@ -796,44 +795,30 @@ async function restoreSession() {
       return false;
     }
 
-    // Moderator restore
     if (screen === "modlobby" || screen === "modcards" || screen === "modgame") {
       const { data: players } = await sb.from("players").select("*").eq("game_id", freshGame.id).eq("is_moderator", false).order("seat_order");
       const targetScreen = freshGame.status === "lobby" ? "modlobby"
         : freshGame.status === "dealing" ? "modcards"
         : "modgame";
-      setState({ screen: targetScreen, game: freshGame, lobbyPlayers: players || [] });
+      _coreSetState({ screen: targetScreen, game: freshGame, lobbyPlayers: players || [] });
       return true;
     }
 
-    // Player restore
     if ((screen === "player" || screen === "playerwaiting") && player?.id) {
       const { data: players } = await sb.from("players").select("*").eq("id", player.id);
       const freshPlayer = players?.[0];
       if (!freshPlayer) { localStorage.removeItem(SESSION_KEY); return false; }
-      setState({ screen: "player", game: freshGame, player: freshPlayer });
+      _coreSetState({ screen: "player", game: freshGame, player: freshPlayer });
       return true;
     }
   } catch(e) {}
   return false;
 }
 
-// Patch setState to also save session
-const _origSetState = setState;
-// Override setState to persist session on every change
-function setState(patch) {
-  _origSetState(patch);
-  const s = getState();
-  saveSession(s.screen, s.game, s.player);
-}
-
 // ── VISIBILITY REFRESH (fix for mobile sleep) ─────────────────────────────────
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    const { screen } = getState();
-    // Trigger a re-render which will cause each screen's load() to re-fire
-    // via the subscribe mechanism by forcing a state touch
-    _origSetState({ _wake: Date.now() });
+    _coreSetState({ _wake: Date.now() });
   }
 });
 
