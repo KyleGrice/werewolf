@@ -135,6 +135,7 @@ const sb = createClient(
 
 const IMG_BASE = "https://kylegrice.github.io/werewolf/images/";
 function cardImg(name) {
+  if(name==="P.I.") return IMG_BASE + "private_investigator.jpg";
   return IMG_BASE + name.toLowerCase().replace(/ /g,"_") + ".jpg";
 }
 
@@ -276,42 +277,35 @@ function imgEl(src, cls, alt="card"){
   return i;
 }
 
-// ── CARD MODAL (image-first) ──────────────────────────────────────────────────
+// ── CARD MODAL (image-first, full card visible) ───────────────────────────────
 function showCardModal(card){
   const c = TC[card.team]||TC.Neutral;
   const overlay = div("fixed inset-0 z-50 flex items-center justify-center p-4",[]);
   overlay.style.background = "rgba(0,0,0,0.9)";
 
-  const box = div("rounded-2xl border-2 max-w-sm w-full shadow-2xl overflow-hidden",[]);
-  box.style.borderColor = c.border;
-  box.style.background = `linear-gradient(to bottom,${c.gradA},${c.gradB})`;
+  const box = div("rounded-2xl border-2 shadow-2xl overflow-hidden",[]);
+  box.style.cssText = `border-color:${c.border};max-width:320px;width:100%;`;
 
-  // Image
-  const imgWrap = div("relative w-full",[]);
-  const img = el("img",{src:cardImg(card.name),alt:card.name,class:"w-full"});
-  img.style.maxHeight = "360px";
-  img.style.objectFit = "cover";
-  img.style.display = "block";
-  // fallback: hide if broken
-  img.onerror = () => { imgWrap.style.display="none"; };
-  imgWrap.appendChild(img);
+  // Full card image — uncropped
+  const img = el("img",{src:cardImg(card.name),alt:card.name});
+  img.style.cssText = "width:100%;display:block;";
+  img.onerror = () => { img.style.display="none"; };
 
-  // Close button overlaid on image
-  const closeBtn = btn("absolute text-white text-2xl font-bold","✕",()=>overlay.remove());
-  closeBtn.style.cssText = "top:.5rem;right:.75rem;position:absolute;background:rgba(0,0,0,0.5);border-radius:50%;width:2rem;height:2rem;display:flex;align-items:center;justify-content:center;line-height:1;";
-  imgWrap.appendChild(closeBtn);
-  box.appendChild(imgWrap);
+  // Close button overlaid top-right
+  const closeBtn = el("button",{}["✕"]);
+  closeBtn.textContent = "✕";
+  closeBtn.style.cssText = "position:absolute;top:.5rem;right:.5rem;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:2rem;height:2rem;font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;";
+  closeBtn.onclick = ()=>overlay.remove();
 
-  // Text info below image
-  const info = div("p-4",[
-    div("flex justify-between items-center mb-2",[
-      el("h2",{class:"text-xl font-bold",style:{color:c.text}},[card.name]),
-      el("span",{class:"text-sm font-bold",style:{color:c.text}},[pts(card.points)+" pts"])
-    ]),
-    pill(card.team),
-    el("p",{class:"text-sm leading-relaxed mt-2",style:{color:c.text,opacity:"0.9"}},[card.text])
-  ]);
-  box.appendChild(info);
+  const imgWrap = el("div",{},[]);
+  imgWrap.style.position = "relative";
+  imgWrap.append(img, closeBtn);
+
+  // Slim info bar below card
+  const bar = div("flex items-center justify-center px-3 py-2",[pill(card.team)]);
+  bar.style.background = c.gradB;
+
+  box.append(imgWrap, bar);
   overlay.appendChild(box);
   overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
   document.body.appendChild(overlay);
