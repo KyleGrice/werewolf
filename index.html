@@ -237,6 +237,7 @@ let _subs = [];
 function getState(){ return _state; }
 function setState(patch){ _state={..._state,...patch}; _subs.forEach(f=>f()); }
 function subscribe(fn){ _subs.push(fn); return ()=>{ _subs=_subs.filter(f=>f!==fn); }; }
+// setState is redefined after session helpers are declared — see below
 
 // ── RENDER LOOP ───────────────────────────────────────────────────────────────
 function mount(fn){
@@ -767,23 +768,99 @@ function screenPlayer(){
   return [wrap, ()=>channels.forEach(c=>sb.removeChannel(c))];
 }
 
-// ── MAIN RENDER ───────────────────────────────────────────────────────────────
-mount(root => {
-  const {screen} = getState();
-  let result;
-  if(screen==="home") result=screenHome();
-  else if(screen==="modsetup") result=screenModSetup();
-  else if(screen==="modlobby") result=screenModLobby();
-  else if(screen==="modcards") result=screenModCards();
-  else if(screen==="modgame") result=screenModGame();
-  else if(screen==="join") result=screenJoin();
-  else if(screen==="player") result=screenPlayer();
-  else result=screenHome();
+// ── SESSION PERSISTENCE ───────────────────────────────────────────────────────
+const SESSION_KEY = "ww_session";
 
-  const [node, cleanup] = Array.isArray(result)?result:[result, null];
-  root.appendChild(node);
-  return cleanup;
+function saveSession(screen, game, player) {
+  try {
+    if (screen === "home" || screen === "modsetup" || screen === "join") {
+      localStorage.removeItem(SESSION_KEY);
+    } else {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ screen, game, player }));
+    }
+  } catch(e) {}
+}
+
+async function restoreSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const { screen, game, player } = JSON.parse(raw);
+    if (!game?.id) return false;
+
+    // Re-fetch fresh game state
+    const { data: games } = await sb.from("games").select("*").eq("id", game.id);
+    const freshGame = games?.[0];
+    if (!freshGame || freshGame.status === "ended") {
+      localStorage.removeItem(SESSION_KEY);
+      return false;
+    }
+
+    // Moderator restore
+    if (screen === "modlobby" || screen === "modcards" || screen === "modgame") {
+      const { data: players } = await sb.from("players").select("*").eq("game_id", freshGame.id).eq("is_moderator", false).order("seat_order");
+      const targetScreen = freshGame.status === "lobby" ? "modlobby"
+        : freshGame.status === "dealing" ? "modcards"
+        : "modgame";
+      setState({ screen: targetScreen, game: freshGame, lobbyPlayers: players || [] });
+      return true;
+    }
+
+    // Player restore
+    if ((screen === "player" || screen === "playerwaiting") && player?.id) {
+      const { data: players } = await sb.from("players").select("*").eq("id", player.id);
+      const freshPlayer = players?.[0];
+      if (!freshPlayer) { localStorage.removeItem(SESSION_KEY); return false; }
+      setState({ screen: "player", game: freshGame, player: freshPlayer });
+      return true;
+    }
+  } catch(e) {}
+  return false;
+}
+
+// Patch setState to also save session
+const _origSetState = setState;
+// Override setState to persist session on every change
+function setState(patch) {
+  _origSetState(patch);
+  const s = getState();
+  saveSession(s.screen, s.game, s.player);
+}
+
+// ── VISIBILITY REFRESH (fix for mobile sleep) ─────────────────────────────────
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    const { screen } = getState();
+    // Trigger a re-render which will cause each screen's load() to re-fire
+    // via the subscribe mechanism by forcing a state touch
+    _origSetState({ _wake: Date.now() });
+  }
 });
+
+// ── MAIN RENDER ───────────────────────────────────────────────────────────────
+async function init() {
+  const restored = await restoreSession();
+  if (!restored) setState({ screen: "home" });
+
+  mount(root => {
+    const {screen} = getState();
+    let result;
+    if(screen==="home") result=screenHome();
+    else if(screen==="modsetup") result=screenModSetup();
+    else if(screen==="modlobby") result=screenModLobby();
+    else if(screen==="modcards") result=screenModCards();
+    else if(screen==="modgame") result=screenModGame();
+    else if(screen==="join") result=screenJoin();
+    else if(screen==="player") result=screenPlayer();
+    else result=screenHome();
+
+    const [node, cleanup] = Array.isArray(result)?result:[result, null];
+    root.appendChild(node);
+    return cleanup;
+  });
+}
+
+init();
 </script>
 </body>
 </html>
